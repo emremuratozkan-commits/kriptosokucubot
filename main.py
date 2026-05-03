@@ -28,9 +28,21 @@ from econometrics import EconometricsEngine
 from debug_logger import DebugLogger
 
 
+async def prepare_exchange_for_sniper(exchange, symbols, leverage=50):
+    print("[INIT] Sniper modu için borsaya kaldıraçlar tanımlanıyor...")
+    for sym in symbols:
+        try:
+            await exchange.set_leverage(leverage, sym)
+            await exchange.set_margin_mode('isolated', sym)
+        except Exception as e:
+            # Bazı coinler 50x desteklemezse fallback yap
+            pass
+    print("[INIT] Tüm silahlar doldu. Bot başlatılıyor.")
+
+
 async def bootstrap():
     print("=" * 50)
-    print("  PREDATOR v3 — AGRESİF SCALP BOT")
+    print("  PREDATOR v4 — AGRESİF SCALP BOT")
     print("  Post-Only | Order Flow | Adaptive TP/SL")
     print("=" * 50)
 
@@ -50,6 +62,9 @@ async def bootstrap():
     # ── 2. MARKETS YÜKLEMESİ ─────────────────────────────
     await exchange.load_markets()
     print(f"[MAIN] Piyasa verileri yüklendi.")
+
+    # ── 2.5 KALDIRAÇ AYARLARI ────────────────────────────
+    await prepare_exchange_for_sniper(exchange, SYMBOLS, LEVERAGE)
 
     # ── 3. WEBSOCKET MANAGER ─────────────────────────────
     ws = WebSocketManager(exchange)
