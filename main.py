@@ -3,6 +3,7 @@
 
 import asyncio
 import sys
+import time
 
 # uvloop: Linux/VPS'de aktif, Windows'da devre dışı
 try:
@@ -64,7 +65,7 @@ async def bootstrap():
     print(f"[MAIN] Piyasa verileri yüklendi.")
 
     # ── 2.5 KALDIRAÇ AYARLARI ────────────────────────────
-    await prepare_exchange_for_sniper(exchange, SYMBOLS, LEVERAGE)
+    # (Bu işlem artık engine_main_loop içinde yapılıyor)
 
     # ── 3. WEBSOCKET MANAGER ─────────────────────────────
     ws = WebSocketManager(exchange)
@@ -121,8 +122,30 @@ async def bootstrap():
         "⚡ Post-Only | Maker-First | Elite Engine v4"
     )
 
+    # ── 13. STABILITY LOOP (RESTARTER) ───────────────────
+    async def engine_main_loop():
+        start_time = time.time()
+        # İlk başta kaldıraçları ayarla
+        await prepare_exchange_for_sniper(exchange, SYMBOLS, LEVERAGE)
+        
+        while True:
+            try:
+                # SELF-HEALING: Her 6 saatte bir WebSocket tazele
+                if time.time() - start_time > 21600:
+                    print("[SYSTEM] 6 saat doldu. Bağlantılar tazeleniyor...")
+                    if hasattr(ws, 'reconnect'): # ws_manager'da varsa çağır
+                        await ws.reconnect()
+                    start_time = time.time()
+
+                # Botun ana motorunu çalıştır
+                await engine.run()
+                
+            except Exception as e:
+                print(f"[RECOVERY] Hata oluştu: {e}. 5 saniye sonra yeniden başlanıyor...")
+                await asyncio.sleep(5)
+
     await asyncio.gather(
-        engine.run(),
+        engine_main_loop(),
         tg.run(),
         garch_updater(),
     )
