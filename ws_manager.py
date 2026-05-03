@@ -45,6 +45,10 @@ class WebSocketManager:
             self._tasks.append(asyncio.create_task(self._feed_orderbook(sym)))
             self._tasks.append(asyncio.create_task(self._feed_trades(sym)))
             self._tasks.append(asyncio.create_task(self._feed_ohlcv(sym)))
+            
+            # Binance'in bağlantı limitine (Rate Limit) takılmamak için 200ms bekle
+            await asyncio.sleep(0.2) 
+            
         print(f"[WS] {len(symbols)} sembol için {len(self._tasks)} WebSocket stream başlatıldı (ELITE MODE).")
 
     async def _feed_orderbook(self, symbol):
