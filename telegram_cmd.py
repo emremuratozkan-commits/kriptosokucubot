@@ -31,6 +31,18 @@ class TelegramBot:
         self.offset = 0
         self.running = True
 
+    async def _get_real_balance(self):
+        """Binance'ten gerçek zamanlı USDT (veya USDC) bakiyesini çeker."""
+        try:
+            balance = await self.engine.exchange.fetch_balance()
+            # Genelde Futures cüzdanında USDT veya USDC tutulur
+            usdt_total = balance.get('USDT', {}).get('total', 0.0)
+            return usdt_total
+        except Exception as e:
+            print(f"[TG BALANCE ERROR] {e}")
+            # Hata verirse lokal bakiyeye dön (fallback)
+            return self.engine.risk.balance
+
     async def run(self):
         print("[TG] Telegram bot dinliyor...")
         while self.running:
@@ -80,9 +92,10 @@ class TelegramBot:
 
         # /status
         elif cmd[0] == '/status':
+            real_balance = await self._get_real_balance()
             slots = e.active_slots
             if not slots:
-                await send("📭 <b>Açık pozisyon yok.</b>")
+                await send(f"📭 <b>Açık pozisyon yok.</b>\n💰 Bakiye: ${real_balance:.2f}")
                 return
             lines = [f"📊 <b>Açık Pozisyonlar ({len(slots)}/{MAX_SLOTS})</b>"]
             for sym, p in slots.items():
@@ -95,13 +108,14 @@ class TelegramBot:
                     f"   TP: {p['tp']:.5f} | SL: {p['sl']:.5f}"
                 )
             lines.append(f"\n📡 Piyasa: {'🟢' if e.running else '🔴'}")
-            lines.append(f"💰 Bakiye: ${e.risk.balance:.2f}")
+            lines.append(f"💰 Gerçek Bakiye: ${real_balance:.2f}")
             lines.append(f"📈 Günlük PnL: {e.risk.daily_pnl:+.2f}$")
             lines.append(f"⚡ Ort. Fill: {e.avg_latency_ms():.0f}ms")
             await send('\n'.join(lines))
 
         # /pnl
         elif cmd[0] == '/pnl':
+            real_balance = await self._get_real_balance()
             t = e.stats['total']
             w = e.stats['wins']
             wr = (w / t * 100) if t > 0 else 0
@@ -111,7 +125,7 @@ class TelegramBot:
                 f"━━━━━━━━━━━━━━━\n"
                 f"💰 Net PnL: <b>{pnl:+.3f} USDT</b>\n"
                 f"📊 Winrate: %{wr:.1f} ({w}/{t})\n"
-                f"💵 Bakiye: ${e.risk.balance:.2f}\n"
+                f"💵 Gerçek Bakiye: ${real_balance:.2f}\n"
                 f"📉 Günlük PnL: {e.risk.daily_pnl:+.2f}$\n"
                 f"⚡ Ort. Fill: {e.avg_latency_ms():.0f}ms"
             )
