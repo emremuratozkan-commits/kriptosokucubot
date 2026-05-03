@@ -78,9 +78,23 @@ class TelegramBot:
 
         # /start
         if cmd[0] == '/start':
+            # Motor kilit kontrolü (Spam koruması)
+            if getattr(e, '_start_lock', False):
+                await send("⏳ Motor zaten uyanıyor, sakin ol!")
+                return
+
             if not e.running:
+                e._start_lock = True  # Kilidi vur
                 e.running = True
-                asyncio.create_task(e.run())
+                
+                # Eski zombi task varsa tamamen ez
+                if hasattr(e, '_main_task') and not e._main_task.done():
+                    e._main_task.cancel()
+                
+                # Yeni motoru güvenle başlat
+                e._main_task = asyncio.create_task(e.run())
+                e._start_lock = False # Kilidi aç
+                
                 await send("✅ <b>PREDATOR v4 ELITE başlatıldı!</b>")
             else:
                 await send("ℹ️ Bot zaten çalışıyor.")

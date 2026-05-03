@@ -220,7 +220,7 @@ class WebSocketManager:
     def get_atr(self, s, period=14):
         cd = self.candles.get(s, [])
         if len(cd) < period + 1:
-            return 0.0
+            return 0.00001  # BURAYI 0.0 YERİNE 0.00001 YAPTIK
         recent = cd[-(period + 1):]
         h = np.array([c[2] for c in recent])
         l = np.array([c[3] for c in recent])

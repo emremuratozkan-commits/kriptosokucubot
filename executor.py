@@ -61,8 +61,14 @@ class Executor:
             
             bb = self.ws.get_best_bid(symbol)
             ba = self.ws.get_best_ask(symbol)
-            tick = (ba - bb) if ba > bb else bb * 0.00001
-            ioc_price = ba - tick if close_side == 'sell' else bb + tick
+            # +++ YENİ KODU YAPŞTIR (HFT Agresif Çaprazlama) +++
+            if close_side == 'sell':
+                # Alıcının %0.1 altına fırlat (Borsa zaten en iyi fiyattan satar, emrin iptal olmaz)
+                ioc_price = bb * 0.999
+            else:
+                # Satıcının %0.1 üstüne fırlat
+                ioc_price = ba * 1.001
+            
             ioc_price = float(self.exchange.price_to_precision(symbol, ioc_price))
 
             try:
