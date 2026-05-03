@@ -97,7 +97,11 @@ class OmniEngine:
         
         # GHOST FARKINI KAPATAN FİLTRE: Fiyat çok kaydıysa zararına girme, iptal et çık
         slippage = abs(fill_price - price) / price
-        if slippage > 0.0005:
+        
+        # KRİTİK EŞİK: %0.05 (On binde 5)
+        if slippage > 0.0005: 
+            print(f"[SLIPPAGE ALERT] {symbol} Kayma çok yüksek (%{slippage*100:.3f}). Acil kapatılıyor!")
+            # İşlemi kar/zarar bakmadan anında Market emriyle kapat
             await self.executor.place_close(symbol, side, fill_amount)
             return
 
@@ -174,16 +178,21 @@ class OmniEngine:
             asyncio.create_task(self.watcher.watch(symbol))
 
     async def _hard_timeout_watcher(self):
-        """50x Kaldıraçta 60 saniyeden uzun süren işlemleri acımadan kapatır."""
+        """Her saniye açık pozisyonları kontrol eder ve 60 sn'yi geçeni infaz eder."""
         while self.running:
-            now = time.time()
-            for symbol, pos in list(self.active_slots.items()):
-                if now - pos['open_time'] > 60.0: # 60 Saniye Kuralı
-                    print(f"[TIMEOUT] {symbol} 60 saniyeyi geçti. Acil Market Çıkışı!")
-                    await self.executor.place_close(symbol, pos['side'], pos['amount'])
-                    # active_slots'tan sil
-                    self.active_slots.pop(symbol, None)
-            await asyncio.sleep(1)
+            try:
+                now = time.time()
+                for symbol, pos in list(self.active_slots.items()):
+                    # 60 saniye kuralı: Scalping için altın süre
+                    if now - pos['open_time'] > 60.0:
+                        print(f"[HARD TIMEOUT] {symbol} Süre doldu. Kâr/Zarar kilitleniyor.")
+                        # Mevcut kârda olsa da zararda olsa da masadan kalk
+                        await self.executor.place_close(symbol, pos['side'], pos['amount'])
+                        if symbol in self.active_slots:
+                            del self.active_slots[symbol]
+                await asyncio.sleep(1) # CPU'yu yormadan saniyelik kontrol
+            except Exception as e:
+                print(f"[TIMEOUT WATCHER ERROR] {e}")
 
     # ─── STAT / DEBUG ────────────────────────────────────────────
     def avg_latency_ms(self) -> float:
