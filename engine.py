@@ -18,6 +18,8 @@ class OmniEngine:
         self.debug = debug
         self.watcher = None  # main.py'de set edilecek
 
+        self.btc_pause_until = 0 # BTC koruması için zaman damgası
+
         self.active_slots: dict[str, dict] = {}
         self.trade_gate = asyncio.Lock()
         self.running = False
@@ -47,6 +49,16 @@ class OmniEngine:
     async def _evaluate(self, symbol: str):
         if symbol in self.active_slots: return
 
+        # ── 1. GLOBAL BTC KONTROLÜ ──────────────────────────────
+        if time.time() < self.btc_pause_until:
+            return # BTC fırtınası var, bekle
+
+        btc_move = self.ws.get_change_pct("BTCUSDT", window=60) # Son 1 dakikalık % değişim
+        if abs(btc_move) > 0.0035: # BTC %0.35'ten fazla oynarsa (sert iğne)
+            self.btc_pause_until = time.time() + 300 # 5 dakika tüm sistemi dondur
+            print("[CRITICAL] BTC Sert Hareket! Sistem 5 dk donduruldu.")
+            return
+
         # 1. KİLİDİ SADECE SLOT SAYIMI İÇİN KULLAN (Botu dondurma)
         async with self.trade_gate:
             if len(self.active_slots) >= MAX_SLOTS: return
@@ -65,6 +77,12 @@ class OmniEngine:
         garch_var = sig['garch_var']
 
         trade_params = self.signals.calc_trade_params(atr_pct, garch_var)
+        
+        # Rejime göre TP çarpanlarını ayarla
+        regime = sig.get('regime', 'TREND')
+        tp_mult = 1.3 if regime == 'TREND' else 0.8 # Trendde kârı koştur, yatayda hemen al çık
+        tp_pct = trade_params['tp_pct'] * tp_mult
+
         sl_pct = trade_params['sl_pct']
         pos_params = self.risk.calc_position(price, sl_pct=sl_pct)
         amount = pos_params['amount']
@@ -84,7 +102,6 @@ class OmniEngine:
             return
 
         # --- TP/SL HESAPLAMA ---
-        tp_pct = trade_params['tp_pct']
         sl_pct = trade_params['sl_pct']
         
         if self.debug:
