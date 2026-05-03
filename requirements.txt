@@ -1,0 +1,9 @@
+ccxt==4.4.40
+numpy
+pandas
+arch
+statsmodels
+scipy
+supabase
+aiohttp
+uvloop

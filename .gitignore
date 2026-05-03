@@ -1,0 +1,8 @@
+config.py
+__pycache__/
+*.pyc
+venv/
+.env
+predator.tar.gz
+test_api.py
+*.pem
