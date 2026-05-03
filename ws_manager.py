@@ -231,7 +231,21 @@ class WebSocketManager:
         return float(np.mean(tr))
 
     async def close(self):
+        """Tüm taskları güvenli bir şekilde öldür ve bağlantıyı kapat."""
         self._running = False
+        
+        # 1. Bekleyen tüm görevleri iptal et (Zombileri öldür)
+        for task in self._tasks:
+            if not task.done():
+                task.cancel()
+        
+        # 2. Görevlerin kapanmasını bekle
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+            
+        self._tasks = [] # Artık listeyi güvenle temizleyebiliriz
+        
+        # 3. Exchange bağlantısını kapat
         try:
             await self.exchange.close()
         except Exception:
