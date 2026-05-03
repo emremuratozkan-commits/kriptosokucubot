@@ -3,6 +3,7 @@
 # Elite Setup: A-grade trades only
 
 import numpy as np
+import time
 from config import (
     EMA_FAST, EMA_SLOW, MODES, DEFAULT_MODE,
     TP_MIN, TP_MAX, TP_ATR_MULT,
@@ -39,131 +40,57 @@ class SignalEngine:
             self.mode = mode
 
     def evaluate(self, symbol: str) -> dict | None:
-        """
-        Elite Sinyal Motoru: Sadece A-grade orderflow setup'ları alır.
-        Fake sinyalleri eler.
-        """
-        # ── 1. FİYAT / LİKİDİTE KONTROLÜ ────────────────────────
         price = self.ws.get_price(symbol)
-        if price <= 0:
-            return None
+        if price <= 0: return None
 
         atr = self.ws.get_atr(symbol)
         atr_pct = atr / price if price > 0 else 0
-        if atr_pct < MIN_ATR_PCT:
-            return None  # Ölü piyasa (volatilite yok)
+        if atr_pct < MIN_ATR_PCT: return None
 
         spread = self.ws.get_spread(symbol)
-        if spread > MAX_SPREAD_PCT:
-            return None  # Spread çok geniş (coin seçimi: temiz tahta)
+        if spread > MAX_SPREAD_PCT: return None
 
-        # ── 2. MARKET REGIME (HURST) ────────────────────────────
         hurst = 0.5
         garch_var = 0.0002
         if self.eco is not None:
             closes = self.eco.get_closes(symbol)
             if len(closes) >= 30:
                 hurst = self.eco.hurst(closes)
-                if hurst < HURST_CHOP_MAX:
-                    return None  # Chop (testere) piyasasında işlem yapma
+                if hurst < HURST_CHOP_MAX: return None
             garch_var = self.eco.get_garch(symbol)
 
-        # ── 3. ELITE ORDER FLOW VERİLERİ ────────────────────────
         imbalance = self.ws.get_imbalance(symbol)
         delta = self.ws.get_volume_delta(symbol)
         ema_dir = self._ema_direction(symbol)
-        
-        absorption = self.ws.get_absorption(symbol)
-        pull = self.ws.get_liquidity_pull(symbol)
 
-        # ── 4. TRADE SCORING ENGINE ─────────────────────────────
-        # Long/Short yönünü baştan belirle
         side = 'buy' if imbalance > 0.5 else 'sell'
-        
         score = 0.0
-        is_fake = False
         
+        # LIVE PİYASA İÇİN SERTLEŞTİRİLMİŞ FİLTRELER
         if side == 'buy':
-            # ✔ Imbalance (0.62+ elite level)
-            if imbalance > 0.62:
-                score += self.SCORE_WEIGHTS['imbalance']
-            elif imbalance > 0.55:
-                score += self.SCORE_WEIGHTS['imbalance'] * 0.5
-                
-            # ✔ Aggressive Buyers (Delta > 20%)
-            if delta > 0.20:
-                score += self.SCORE_WEIGHTS['delta']
-                
-            # ✔ Trend Alignment
-            if ema_dir == 'long':
-                score += self.SCORE_WEIGHTS['trend']
-                
-            # ✔ Volatility (Hurst > 0.55 trending)
-            if hurst > HURST_TREND_MIN:
-                score += self.SCORE_WEIGHTS['volatility']
-                
-            # ✔ Liquidity Absorption / Pull (Edge)
-            if absorption['bid']: # Ayıların satışı karşılanıyor (Bullish)
-                score += self.SCORE_WEIGHTS['liquidity']
-            if pull['ask']: # Yukarıdaki direnç çekildi
-                score += self.SCORE_WEIGHTS['liquidity'] * 0.5
-                
-            # ❌ Fake Signal Filter
-            if delta < 0.05 and imbalance > 0.65:
-                is_fake = True # Sadece tahtaya emir yazıldı ama alan yok (Spoofing)
-            if pull['bid']: 
-                is_fake = True # Alt kademe desteği birden kayboldu
-                
+            if imbalance > 0.68: score += self.SCORE_WEIGHTS['imbalance'] # 0.62'den 0.68'e çıktı
+            if delta > 0.20: score += self.SCORE_WEIGHTS['delta']
+            if ema_dir == 'long': score += self.SCORE_WEIGHTS['trend']
+            if hurst > HURST_TREND_MIN: score += self.SCORE_WEIGHTS['volatility']
         else:
-            # ✔ Imbalance (< 0.38 elite level)
-            if imbalance < 0.38:
-                score += self.SCORE_WEIGHTS['imbalance']
-            elif imbalance < 0.45:
-                score += self.SCORE_WEIGHTS['imbalance'] * 0.5
-                
-            # ✔ Aggressive Sellers
-            if delta < -0.20:
-                score += self.SCORE_WEIGHTS['delta']
-                
-            # ✔ Trend Alignment
-            if ema_dir == 'short':
-                score += self.SCORE_WEIGHTS['trend']
-                
-            # ✔ Volatility
-            if hurst > HURST_TREND_MIN:
-                score += self.SCORE_WEIGHTS['volatility']
-                
-            # ✔ Liquidity Absorption / Pull
-            if absorption['ask']: # Boğaların alışı karşılanıyor (Bearish)
-                score += self.SCORE_WEIGHTS['liquidity']
-            if pull['bid']: # Alttaki destek çekildi
-                score += self.SCORE_WEIGHTS['liquidity'] * 0.5
-                
-            # ❌ Fake Signal Filter
-            if delta > -0.05 and imbalance < 0.35:
-                is_fake = True # Satış baskısı sadece görüntü, hacim yok (Spoofing)
-            if pull['ask']:
-                is_fake = True # Üst direnç birden kayboldu, short squeeze gelebilir
+            if imbalance < 0.32: score += self.SCORE_WEIGHTS['imbalance'] # 0.38'den 0.32'ye düştü
+            if delta < -0.20: score += self.SCORE_WEIGHTS['delta']
+            if ema_dir == 'short': score += self.SCORE_WEIGHTS['trend']
+            if hurst > HURST_TREND_MIN: score += self.SCORE_WEIGHTS['volatility']
 
-        # Elite Filter: Yalnızca A-grade setuplar
-        if is_fake or score < self.SCORE_THRESHOLD:
-            return None
+        if score < self.SCORE_THRESHOLD: return None
 
-        # ── 5. FEE & EDGE PROTECTION ────────────────────────────
-        # Hedeflenen kâr > fee + spread + buffer kontrolü
+        # LIVE SLIPPAGE KORUMASI (Buffer artırıldı)
         trade_params = self.calc_trade_params(atr_pct, garch_var)
         expected_profit_pct = trade_params['tp_pct']
-        
-        # Taker fallback ihtimali ve slippage (buffer) hesaplaması
-        max_fee_cost = (MAKER_FEE + TAKER_FEE) # En kötü senaryo fee
-        edge_buffer = 0.0002 # Slippage ve belirsizlik buffer'ı
+        max_fee_cost = (MAKER_FEE + TAKER_FEE)
+        edge_buffer = 0.0005 # Eskiden 0.0002'ydi. 50x için kayma payı eklendi.
         
         if expected_profit_pct < (max_fee_cost + spread + edge_buffer):
-            return None # Trade potansiyeli riske/masrafa değmez
-            
+            return None 
+
         return {
             'side': side,
-            'strength': int(score * 10), # 0-10 arası
             'score': score,
             'imbalance': imbalance,
             'delta': delta,
@@ -172,6 +99,7 @@ class SignalEngine:
             'hurst': hurst,
             'garch_var': garch_var,
             'price': price,
+            'signal_time': time.time() # YENİ: Sinyalin üretildiği anı mühürle
         }
 
     def calc_trade_params(self, atr_pct: float, garch_var: float = 0.0002) -> dict:
