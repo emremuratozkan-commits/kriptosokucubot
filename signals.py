@@ -40,66 +40,63 @@ class SignalEngine:
             self.mode = mode
 
     def evaluate(self, symbol: str) -> dict | None:
+        # ── 1. ANA VERİLER VE SPREAD KONTROLÜ ──────────────────────
         price = self.ws.get_price(symbol)
-        if price <= 0: return None
-
+        spread = self.ws.get_spread(symbol) # WebSocket'ten anlık makas
         atr = self.ws.get_atr(symbol)
         atr_pct = atr / price if price > 0 else 0
-        if atr_pct < MIN_ATR_PCT: return None
+        
+        # LİKİDİTE MUHAFIZI: Makas, volatilitenin %10'undan fazlaysa işlem açma (7/24 Koruması)
+        if spread > (atr * 0.10): #
+            return None
 
-        spread = self.ws.get_spread(symbol)
-        if spread > MAX_SPREAD_PCT: return None
-
+        # ── 2. PİYASA REJİMİ TESPİTİ (HURST) ────────────────────────
         hurst = 0.5
-        garch_var = 0.0002
         if self.eco is not None:
             closes = self.eco.get_closes(symbol)
             if len(closes) >= 30:
-                hurst = self.eco.hurst(closes)
-                if hurst < HURST_CHOP_MAX: return None
-            garch_var = self.eco.get_garch(symbol)
+                hurst = self.eco.hurst(closes) #
 
+        # REJİM BELİRLEME
+        if hurst > 0.55:
+            regime = 'TREND'
+            self.SCORE_THRESHOLD = 0.70 # Trend varken daha seçici ol
+        elif hurst < 0.45:
+            regime = 'MEAN_REVERSION'
+            self.SCORE_THRESHOLD = 0.60 # Yatayda tepki alımları için esne
+        else:
+            return None # 'CHAOS' (0.45-0.55): Belirsizlikte 50x açılmaz.
+
+        # ── 3. ADAPTİF SİNYAL PUANLAMA ──────────────────────────────
         imbalance = self.ws.get_imbalance(symbol)
         delta = self.ws.get_volume_delta(symbol)
         ema_dir = self._ema_direction(symbol)
-
         side = 'buy' if imbalance > 0.5 else 'sell'
+        
         score = 0.0
-        
-        # LIVE PİYASA İÇİN SERTLEŞTİRİLMİŞ FİLTRELER
-        if side == 'buy':
-            if imbalance > 0.68: score += self.SCORE_WEIGHTS['imbalance'] # 0.62'den 0.68'e çıktı
-            if delta > 0.20: score += self.SCORE_WEIGHTS['delta']
-            if ema_dir == 'long': score += self.SCORE_WEIGHTS['trend']
-            if hurst > HURST_TREND_MIN: score += self.SCORE_WEIGHTS['volatility']
-        else:
-            if imbalance < 0.32: score += self.SCORE_WEIGHTS['imbalance'] # 0.38'den 0.32'ye düştü
-            if delta < -0.20: score += self.SCORE_WEIGHTS['delta']
-            if ema_dir == 'short': score += self.SCORE_WEIGHTS['trend']
-            if hurst > HURST_TREND_MIN: score += self.SCORE_WEIGHTS['volatility']
+        # Trend Rejiminde EMA yönü zorunluluğu
+        if regime == 'TREND':
+            if side == 'buy' and ema_dir != 'long': return None
+            if side == 'sell' and ema_dir != 'short': return None
+            score += 0.20 # Trend uyumuna ekstra puan
 
-        if score < self.SCORE_THRESHOLD: return None
+        # Standart Flow Kontrolleri
+        if (side == 'buy' and imbalance > 0.65) or (side == 'sell' and imbalance < 0.35):
+            score += self.SCORE_WEIGHTS['imbalance']
+        if abs(delta) > 0.20:
+            score += self.SCORE_WEIGHTS['delta']
 
-        # LIVE SLIPPAGE KORUMASI (Buffer artırıldı)
-        trade_params = self.calc_trade_params(atr_pct, garch_var)
-        expected_profit_pct = trade_params['tp_pct']
-        max_fee_cost = (MAKER_FEE + TAKER_FEE)
-        edge_buffer = 0.0005 # Eskiden 0.0002'ydi. 50x için kayma payı eklendi.
-        
-        if expected_profit_pct < (max_fee_cost + spread + edge_buffer):
-            return None 
+        if score < self.SCORE_THRESHOLD:
+            return None
 
         return {
             'side': side,
+            'regime': regime, # Engine'a rejim bilgisini gönder
             'score': score,
-            'imbalance': imbalance,
-            'delta': delta,
-            'ema_dir': ema_dir,
+            'price': price,
             'atr_pct': atr_pct,
             'hurst': hurst,
-            'garch_var': garch_var,
-            'price': price,
-            'signal_time': time.time() # YENİ: Sinyalin üretildiği anı mühürle
+            'signal_time': time.time()
         }
 
     def calc_trade_params(self, atr_pct: float, garch_var: float = 0.0002) -> dict:
