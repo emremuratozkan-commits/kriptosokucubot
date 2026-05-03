@@ -179,6 +179,33 @@ class WebSocketManager:
     def get_absorption(self, s): return self.absorption_flags.get(s, {'bid': False, 'ask': False})
     def get_liquidity_pull(self, s): return self.pull_flags.get(s, {'bid': False, 'ask': False})
 
+    def get_change_pct(self, s, window=60) -> float:
+        """Belirli bir pencere içindeki % değişimi hesaplar (BTC Protector için)."""
+        buf = self.trade_buffer.get(s, [])
+        if not buf: return 0.0
+        now = time.time()
+        recent = [x for x in buf if now - x[0] <= window]
+        if len(recent) < 2: return 0.0
+        start_px = recent[0][3]
+        end_px = recent[-1][3]
+        return (end_px - start_px) / start_px if start_px > 0 else 0.0
+
+    def get_tick_size(self, symbol) -> float:
+        """Sembolün minimum fiyat adımını (tick) döner."""
+        try:
+            market = self.exchange.market(symbol)
+            return float(market['precision']['price']) if 'precision' in market else 0.00001
+        except:
+            return 0.00001
+
+    async def reconnect(self):
+        """Bağlantıları tazele (Self-healing)."""
+        print("[WS] Yeniden bağlanılıyor...")
+        symbols = list(self.trade_buffer.keys())
+        await self.close()
+        self._tasks = []
+        await self.start(symbols)
+
     def get_price(self, s):
         b, a = self.best_bids.get(s, 0), self.best_asks.get(s, 0)
         if b and a:
